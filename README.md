@@ -118,6 +118,17 @@ export HTTP_PROXY=http://localhost:8888
 node -e "fetch('https://ifconfig.me').then(r=>r.text()).then(console.log)"
 ```
 
+### Browser Optimization (Chrome/Edge/Brave)
+
+Enable parallel downloading in your browser to split files into multiple chunks — this works perfectly with WiBluetooth's load balancing:
+
+1. Open `chrome://flags` in your address bar
+2. Search for **Parallel Downloading**
+3. Set to **Enabled**
+4. Click **Relaunch**
+
+This creates multiple connections per download, which distributes across your bonded interfaces for faster speeds.
+
 ## Requirements
 
 - Linux with systemd (most modern distros)
