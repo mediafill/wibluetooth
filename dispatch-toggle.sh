@@ -237,6 +237,9 @@ start_proxy() {
     # ── Write env vars ───────────────────────────────────────────────────
     write_env_file
 
+    # ── Set system-wide proxy (desktop integration) ──────────────────────
+    set_system_proxy "on"
+
     # ── Start watchdog ───────────────────────────────────────────────────
     start_watchdog
 
@@ -293,6 +296,9 @@ stop_proxy() {
     # Unset env vars
     write_env_file true
 
+    # Unset system-wide proxy (desktop integration)
+    set_system_proxy "off"
+
     notify-send -u normal -i network-offline -t 3000 "$APP_NAME" "Proxy Stopped\nReverted to direct connection." 2>/dev/null || true
     ok "Proxy stopped. Direct connection restored."
 }
@@ -322,6 +328,125 @@ export ALL_PROXY=http://localhost:$HTTP_PORT
 export no_proxy=localhost,127.0.0.1,::1
 export NO_PROXY=localhost,127.0.0.1,::1
 ENVEOF
+    fi
+}
+
+# ─── System Proxy (desktop environment integration) ───────────────────────────
+set_system_proxy() {
+    local mode="$1"  # "on" or "off"
+    local host="localhost" port="$HTTP_PORT" socks_port="$SOCKS_PORT"
+
+    [[ "$mode" == "off" ]] && host="" && port="" && socks_port=""
+
+    local desktop="${XDG_CURRENT_DESKTOP:-}"
+
+    case "$desktop" in
+        *GNOME*|*COSMIC*|*Budgie*|*Pantheon*|*UNITY*)
+            _set_gnome_proxy "$mode" "$host" "$port" "$socks_port"
+            ;;
+        *KDE*|*Plasma*)
+            _set_kde_proxy "$mode" "$host" "$port" "$socks_port"
+            ;;
+        *XFCE*)
+            _set_xfce_proxy "$mode" "$host" "$port" "$socks_port"
+            ;;
+        *Cinnamon*)
+            _set_gnome_proxy "$mode" "$host" "$port" "$socks_port"
+            ;;
+        *MATE*)
+            _set_mate_proxy "$mode" "$host" "$port" "$socks_port"
+            ;;
+        *LXQt*)
+            _set_lxqt_proxy "$mode" "$host" "$port" "$socks_port"
+            ;;
+        *Deepin*)
+            _set_deepin_proxy "$mode" "$host" "$port" "$socks_port"
+            ;;
+        *)
+            # Try GNOME gsettings as fallback (works on most desktops)
+            command -v gsettings &>/dev/null && _set_gnome_proxy "$mode" "$host" "$port" "$socks_port"
+            ;;
+    esac
+}
+
+_set_gnome_proxy() {
+    local mode="$1" host="$2" port="$3" socks_port="$4"
+    command -v gsettings &>/dev/null || return 0
+
+    if [[ "$mode" == "on" ]]; then
+        gsettings set org.gnome.system.proxy mode 'manual'
+        gsettings set org.gnome.system.proxy.socks host "$host"
+        gsettings set org.gnome.system.proxy.socks port "$socks_port"
+        gsettings set org.gnome.system.proxy ignore-hosts "['localhost', '127.0.0.1', '::1']"
+    else
+        gsettings set org.gnome.system.proxy mode 'none'
+    fi
+}
+
+_set_kde_proxy() {
+    local mode="$1" host="$2" port="$3" socks_port="$4"
+    command -v kwriteconfig5 &>/dev/null || return 0
+
+    if [[ "$mode" == "on" ]]; then
+        kwriteconfig5 --file kioslaverc --group "Proxy Settings" --key ProxyType 1
+        kwriteconfig5 --file kioslaverc --group "Proxy Settings" --key SOCKSProxy "$host:$socks_port"
+        kwriteconfig5 --file kioslaverc --group "Proxy Settings" --key NoProxy "localhost,127.0.0.1,::1"
+    else
+        kwriteconfig5 --file kioslaverc --group "Proxy Settings" --key ProxyType 0
+    fi
+}
+
+_set_xfce_proxy() {
+    local mode="$1" host="$2" port="$3" socks_port="$4"
+    command -v xfconf-query &>/dev/null || return 0
+
+    if [[ "$mode" == "on" ]]; then
+        xfconf-query -c xfce4-settings -p /proxy/mode -s manual
+        xfconf-query -c xfce4-settings -p /proxy/socks_host -s "$host"
+        xfconf-query -c xfce4-settings -p /proxy/socks_port -s "$socks_port" -t int
+    else
+        xfconf-query -c xfce4-settings -p /proxy/mode -s none
+    fi
+}
+
+_set_mate_proxy() {
+    local mode="$1" host="$2" port="$3" socks_port="$4"
+    command -v gsettings &>/dev/null || return 0
+
+    if [[ "$mode" == "on" ]]; then
+        gsettings set org.mate.system.proxy mode 'manual'
+        gsettings set org.mate.system.proxy.socks host "$host"
+        gsettings set org.mate.system.proxy.socks port "$socks_port"
+    else
+        gsettings set org.mate.system.proxy mode 'none'
+    fi
+}
+
+_set_lxqt_proxy() {
+    local mode="$1" host="$2" port="$3" socks_port="$4"
+    local conf="$HOME/.config/lxqt/session.conf"
+    mkdir -p "$(dirname "$conf")"
+
+    if [[ "$mode" == "on" ]]; then
+        sed -i '/^proxy_/d' "$conf" 2>/dev/null
+        echo "proxy_type=1" >> "$conf"
+        echo "proxy_addr=$host" >> "$conf"
+        echo "proxy_port=$socks_port" >> "$conf"
+    else
+        sed -i '/^proxy_/d' "$conf" 2>/dev/null
+    fi
+}
+
+_set_deepin_proxy() {
+    local mode="$1" host="$2" port="$3" socks_port="$4"
+    command -v gsettings &>/dev/null || return 0
+
+    if [[ "$mode" == "on" ]]; then
+        gsettings set com.deepin.dde.proxy type 'manual'
+        gsettings set com.deepin.dde.proxy socks-host "$host"
+        gsettings set com.deepin.dde.proxy socks-port "$socks_port"
+    else
+        gsettings set com.deepin.dde.proxy type 'none'
     fi
 }
 
