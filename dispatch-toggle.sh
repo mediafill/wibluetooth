@@ -114,6 +114,20 @@ auto_connect_bluetooth() {
         return 0
     fi
 
+    # Check if any Bluetooth device is connected but has no IP (bnep issue)
+    local bt_dev
+    bt_dev=$(nmcli -t -f DEVICE,TYPE,STATE device status 2>/dev/null | grep ':bt:' | head -1)
+    if [[ -n "$bt_dev" ]]; then
+        local bt_state
+        bt_state=$(echo "$bt_dev" | cut -d: -f3)
+        if [[ "$bt_state" == "connected" ]]; then
+            info "Bluetooth connected but no IP — re-activating..."
+            nmcli device disconnect "$(echo "$bt_dev" | cut -d: -f1)" 2>/dev/null || true
+            sleep 2
+        fi
+    fi
+
+    # Find and activate a Bluetooth connection
     local bt_conn
     bt_conn=$(nmcli -t -f NAME,UUID,TYPE connection show 2>/dev/null | grep ':bluetooth:' | head -1)
     [[ -z "$bt_conn" ]] && return 1
@@ -143,8 +157,8 @@ start_proxy() {
     local raw_ifaces
     raw_ifaces=$(detect_interfaces)
 
-    if [[ -z "$raw_ifaces" ]]; then
-        # Try Bluetooth auto-connect
+    # Always try Bluetooth auto-connect if not already bonded
+    if ! echo "$raw_ifaces" | grep -q "bluetooth"; then
         auto_connect_bluetooth
         raw_ifaces=$(detect_interfaces)
     fi
