@@ -556,6 +556,18 @@ start_proxy() {
         fi
     fi
 
+    # Write proxy env vars for auto-sourcing
+    cat > ~/.wibluetooth-env <<EOF
+export http_proxy=socks5://localhost:$SOCKS_PORT
+export https_proxy=socks5://localhost:$SOCKS_PORT
+export all_proxy=socks5://localhost:$SOCKS_PORT
+export HTTP_PROXY=socks5://localhost:$SOCKS_PORT
+export HTTPS_PROXY=socks5://localhost:$SOCKS_PORT
+export ALL_PROXY=socks5://localhost:$SOCKS_PORT
+export no_proxy=localhost,127.0.0.1,::1
+export NO_PROXY=localhost,127.0.0.1,::1
+EOF
+
     local summary="Proxy Started\n\nBonded $IFACE_COUNT interface(s):$IFACE_INFO\n\n$proxy_type: localhost:$proxy_port"
     notify-send -u normal -i network-transmit-receive -t 5000 "$APP_NAME" "$summary"
 }
@@ -567,7 +579,17 @@ stop_proxy() {
     pkill -9 -f "dispatch-proxy" 2>/dev/null || true
     pkill -9 -f "dispatch start" 2>/dev/null || true
     sleep 1
-    rm -f ~/.wibluetooth-env
+    # Unset proxy env vars
+    cat > ~/.wibluetooth-env <<'EOF'
+unset http_proxy
+unset https_proxy
+unset all_proxy
+unset HTTP_PROXY
+unset HTTPS_PROXY
+unset ALL_PROXY
+unset no_proxy
+unset NO_PROXY
+EOF
     notify-send -u normal -i network-offline -t 3000 "$APP_NAME" "Proxy Stopped\nReverted to direct connection."
 }
 
@@ -781,6 +803,17 @@ DESKTOPTEOF
     ok "Desktop shortcut created"
 }
 
+# ─── Setup bashrc auto-source ───────────────────────────────────
+setup_bashrc() {
+    # Add auto-source line if not already present
+    if ! grep -q "wibluetooth" ~/.bashrc 2>/dev/null; then
+        echo '' >> ~/.bashrc
+        echo '# WiBluetooth proxy auto-source' >> ~/.bashrc
+        echo '[ -f ~/.wibluetooth-env ] && source ~/.wibluetooth-env' >> ~/.bashrc
+        info "Added proxy auto-source to ~/.bashrc"
+    fi
+}
+
 # ─── Main ───────────────────────────────────────────────────────
 main() {
     detect_distro
@@ -788,6 +821,7 @@ main() {
     install_dispatch
     create_toggle_script
     create_desktop_entry
+    setup_bashrc
 
     header "Installation Complete!"
     echo -e "${GREEN}WiBluetooth is ready!${NC}\n"
