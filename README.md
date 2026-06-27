@@ -2,12 +2,10 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform: Linux](https://img.shields.io/badge/Platform-Linux-green.svg)](https://github.com/mediafill/wibluetooth)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
-[![Owner: GET BIT LABS LLC](https://img.shields.io/badge/Owner-GET%20BIT%20LABS%20LLC-purple.svg)](https://github.com/mediafill)
 
 **Multi-interface network bonding for Linux. Combine WiFi, Ethernet, and Bluetooth for aggregated bandwidth and faster downloads.**
 
-A free, open-source Linux network load balancer that bonds multiple internet connections (WiFi, Ethernet, Bluetooth PAN) into a single proxy. Similar to commercial channel bonding solutions, but runs entirely on your machine with no cloud dependency, no subscriptions, and no data caps.
+A free, open-source Linux network load balancer that bonds multiple internet connections into a single proxy. Similar to commercial channel bonding solutions like Speedify, but runs entirely on your machine with no cloud dependency, no subscriptions, and no data caps.
 
 ## Quick Install
 
@@ -24,171 +22,347 @@ chmod +x install.sh
 ./install.sh
 ```
 
-## What It Does
+## Architecture
 
-WiBluetooth automatically detects and bonds all available network interfaces — WiFi, Ethernet, Bluetooth PAN, and more — into a single load-balanced HTTP proxy. Multi-threaded downloaders like aria2, wget2, and browser download managers can then use all connections simultaneously for aggregated throughput.
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────┐
+│  Your App       │────▶│  HTTP Bridge     │────▶│  SOCKS5     │────▶ Internet
+│  (browser, TUI, │     │  (localhost:8888)│     │  dispatch   │
+│   aria2, curl)  │     └──────────────────┘     │  (:1080)    │
+└─────────────────┘                              └──────┬──────┘
+                                                        │
+                              ┌──────────────────────────┼──────────────────────┐
+                              │                          │                      │
+                        ┌─────▼─────┐            ┌──────▼──────┐        ┌──────▼──────┐
+                        │  WiFi     │            │  Ethernet   │        │  Bluetooth  │
+                        │  (wlo1)   │            │  (enx...)   │        │  (bnep0)    │
+                        └───────────┘            └─────────────┘        └─────────────┘
+```
 
-- **Auto-detects** all active network interfaces (multiple WiFi, Ethernet, Bluetooth)
-- **Auto-heals** missing dependencies and non-standard setups
-- **Desktop integration** with toggle icon and notifications
-- **No root required** for daily use after installation
+**Why two proxy ports?**
+- **HTTP proxy (8888)** — Works with ALL apps including TUI tools, Node.js fetch(), Python requests, etc.
+- **SOCKS5 (1080)** — Works with multi-threaded downloaders (aria2, wget2) for bandwidth aggregation
 
 ## Usage
 
-### Desktop Shortcut
+### Desktop
 - **Click** the WiBluetooth icon to toggle proxy on/off
-- **Right-click** for Start / Stop / Status options
-- Shows desktop notifications with connection status
+- **Right-click** for Start / Stop / Restart / Status / Health / List / Heal
 
 ### Command Line
 
 ```bash
-# Toggle proxy (auto-detects all interfaces)
+# Start bonding all interfaces
+dispatch-toggle.sh start
+
+# Stop (revert to direct connection)
+dispatch-toggle.sh stop
+
+# Restart (stop + start)
+dispatch-toggle.sh restart
+
+# Toggle on/off
 dispatch-toggle.sh toggle
 
-# List all detected interfaces
+# List all detected network interfaces
 dispatch-toggle.sh list
 
-# Check proxy health
+# Full health check with end-to-end test
 dispatch-toggle.sh health
 
-# Auto-heal (fix stale processes, verify deps)
+# Auto-heal (fix stale processes, verify deps, reconnect Bluetooth)
 dispatch-toggle.sh heal
 
-# Explicit start/stop/status
-dispatch-toggle.sh start
-dispatch-toggle.sh stop
+# Show proxy status notification
 dispatch-toggle.sh status
 ```
 
-### Use with Download Managers
+### Auto-source Proxy Environment
 
-Set SOCKS5 proxy to `localhost:1080`:
+After installation, new terminal sessions auto-source the proxy:
 
 ```bash
-# Environment variable
-export all_proxy=socks5://localhost:1080
+# Manual source (current session)
+source ~/.wibluetooth-env
 
-# aria2 (multi-threaded downloader) - recommended
-aria2c -x16 --all-proxy=socks5://localhost:1080 https://example.com/file.zip
-
-# wget
-wget -e use_proxy=yes -e http_proxy=socks5://localhost:1080 https://example.com/file.zip
-
-# curl
-curl -x socks5://localhost:1080 https://example.com/file.zip
+# Verify it's set
+env | grep -i proxy
 ```
 
-For apps that don't support SOCKS5, HTTP proxy is also available on port 8080.
+### Use with Applications
+
+```bash
+# Set HTTP proxy (works with everything)
+export http_proxy=http://localhost:8888
+export https_proxy=http://localhost:8888
+
+# Or SOCKS5 (better for multi-threaded downloads)
+export all_proxy=socks5://localhost:1080
+
+# aria2 (multi-threaded downloader — recommended)
+aria2c -x16 --all-proxy=socks5://localhost:1080 https://example.com/file.zip
+
+# curl
+curl --proxy http://localhost:8888 https://example.com
+curl -x socks5://localhost:1080 https://example.com
+
+# wget
+wget -e use_proxy=yes -e http_proxy=http://localhost:8888 https://example.com/file.zip
+
+# Python requests
+export HTTPS_PROXY=http://localhost:8888
+python3 -c "import requests; print(requests.get('https://ifconfig.me').text)"
+
+# Node.js / Deno (the HTTP bridge fixes "UnsupportedProxyProtocol")
+export HTTP_PROXY=http://localhost:8888
+node -e "fetch('https://ifconfig.me').then(r=>r.text()).then(console.log)"
+```
 
 ## Requirements
 
 - Linux with systemd (most modern distros)
 - At least one active network connection
-- `curl` and `bash`
+- `bash`, `curl`, `python3`, `node`, `npm`
+- `bluez`, `network-manager`, `iproute2`, `psmisc` (auto-installed)
+
+## Auto-Healing
+
+WiBluetooth includes a watchdog daemon that monitors every 30 seconds:
+
+- **SOCKS5 proxy dies** → auto-restarts with all detected interfaces
+- **HTTP bridge dies** → auto-restarts the Python bridge
+- **Proxy unresponsive** → kills and restarts
+- **Bluetooth disconnects** → re-activates via NetworkManager
+- **Busy ports** → kills stale processes before starting
+
+Run `dispatch-toggle.sh heal` for manual recovery.
+
+## Troubleshooting
+
+### Proxy won't start
+
+```bash
+# Full auto-heal
+dispatch-toggle.sh heal
+
+# Then start
+dispatch-toggle.sh start
+
+# Check what's wrong
+dispatch-toggle.sh health
+```
+
+### "UnsupportedProxyProtocol" error in TUI apps
+
+This means your app is seeing a `socks5://` proxy it can't handle. Fix:
+
+```bash
+# Source the HTTP proxy env vars
+source ~/.wibluetooth-env
+
+# Or manually set HTTP proxy
+export http_proxy=http://localhost:8888
+export https_proxy=http://localhost:8888
+```
+
+The HTTP bridge (port 8888) translates HTTPS CONNECT requests through the SOCKS5 proxy, so all apps work.
+
+### Bluetooth not connecting
+
+1. **Enable Bluetooth tethering on your phone:**
+   - Android: Settings → Network & Internet → Hotspot & tethering → Bluetooth tethering
+   - iPhone: Settings → Personal Hotspot → Allow Others to Join
+
+2. **Pair the phone:**
+   ```bash
+   bluetoothctl
+   [bluetooth]# pair 74:B0:59:XX:XX:XX
+   [bluetooth]# trust 74:B0:59:XX:XX:XX
+   [bluetooth]# connect 74:B0:59:XX:XX:XX
+   ```
+
+3. **Activate the connection:**
+   ```bash
+   nmcli connection up "Your Phone Name"
+   ```
+
+4. **Start WiBluetooth:**
+   ```bash
+   dispatch-toggle.sh start
+   ```
+
+### Bluetooth connects but no IP (bnep0 not created)
+
+The bnep0 interface may be renamed by NetworkManager. Check:
+
+```bash
+# List all interfaces with IPs
+dispatch-toggle.sh list
+
+# Check nmcli device status
+nmcli device status
+
+# If Bluetooth shows "connected" but no IP, restart the connection:
+nmcli connection down "Your Phone Name"
+nmcli connection up "Your Phone Name"
+```
+
+### Only WiFi detected (no Bluetooth/Ethernet)
+
+```bash
+# Check what interfaces exist
+ip link show
+
+# Check nmcli
+nmcli device status
+
+# Force re-detect
+dispatch-toggle.sh list
+
+# If Bluetooth is paired but not showing, try:
+bluetoothctl power off
+sleep 2
+bluetoothctl power on
+dispatch-toggle.sh start
+```
+
+### Proxy starts but apps can't connect
+
+```bash
+# Check if proxy is listening
+ss -tlnp | grep -E "8888|1080"
+
+# Test proxy directly
+curl --proxy http://localhost:8888 http://ifconfig.me
+curl --socks5-hostname localhost:1080 http://ifconfig.me
+
+# Check firewall
+sudo iptables -L -n | grep -E "8888|1080"
+
+# Kill any stale processes
+dispatch-toggle.sh stop
+sleep 2
+dispatch-toggle.sh start
+```
+
+### Port already in use
+
+```bash
+# Find what's using the port
+fuser 8888/tcp
+fuser 1080/tcp
+
+# Kill it
+sudo fuser -k 8880/tcp
+sudo fuser -k 1080/tcp
+
+# Or use the built-in heal
+dispatch-toggle.sh heal
+```
+
+### Watchdog not running
+
+```bash
+# Check watchdog
+cat /tmp/wibluetooth-watchdog.pid
+kill -0 $(cat /tmp/wibluetooth-watchdog.pid) 2>/dev/null && echo "alive" || echo "dead"
+
+# Restart everything (includes watchdog)
+dispatch-toggle.sh restart
+```
+
+### Proxy works for some sites but not others
+
+Some sites block proxy connections. Try:
+
+```bash
+# Set no_proxy for local sites
+export no_proxy=localhost,127.0.0.1,::1,.local
+
+# Check if the site works without proxy
+curl --noproxy '*' https://example.com
+```
+
+### Debug mode
+
+```bash
+# View SOCKS5 dispatch logs
+cat /tmp/wibluetooth-dispatch.log
+
+# View HTTP bridge logs
+cat /tmp/wibluetooth-http.log
+
+# Run with verbose output
+bash -x dispatch-toggle.sh start 2>&1 | tail -50
+```
+
+### Reinstall from scratch
+
+```bash
+# Stop everything
+dispatch-toggle.sh stop 2>/dev/null
+
+# Remove old files
+rm -f ~/.local/bin/dispatch-toggle.sh
+rm -f ~/.local/bin/wibluetooth-proxy.py
+rm -f ~/.local/bin/wibluetooth-watchdog.sh
+rm -f ~/.wibluetooth-env
+rm -f ~/Desktop/wibluetooth.desktop
+rm -f ~/.local/share/applications/wibluetooth.desktop
+
+# Reinstall
+bash <(curl -sL https://raw.githubusercontent.com/mediafill/wibluetooth/main/install.sh)
+```
 
 ## Supported Platforms
 
 ### Distros
-| Distro Family | Status |
-|---------------|--------|
+| Distro | Status |
+|--------|--------|
 | Ubuntu / Debian | Full support |
 | Fedora / RHEL / CentOS | Full support |
 | Arch / Manjaro | Full support |
 | openSUSE | Full support |
+| Pop!_OS (COSMIC) | Full support |
 | Alpine | Experimental |
-| Any Linux with apt/dnf/pacman | Auto-detected |
 
 ### Desktop Environments
-| Desktop | Status |
-|---------|--------|
-| GNOME (Ubuntu, Fedora) | Full support |
-| KDE Plasma (Kubuntu, Fedora KDE) | Full support |
-| XFCE (Xubuntu) | Full support |
-| Cinnamon (Linux Mint) | Full support |
-| MATE (Ubuntu MATE) | Full support |
-| LXQt (Lubuntu) | Full support |
-| Budgie (Solus, Ubuntu Budgie) | Full support |
-| Deepin | Full support |
-| COSMIC (Pop!_OS) | Full support |
-| Pantheon (elementary OS) | Full support |
-| Tiling WMs (i3, Sway, Hyprland) | Partial support |
+GNOME, KDE Plasma, XFCE, Cinnamon, MATE, LXQt, Budgie, Deepin, COSMIC, Pantheon, tiling WMs (i3, Sway, Hyprland).
 
-## How It Works
+## Key Files
 
-```
-┌─────────────┐     ┌──────────────────┐     ┌─────────────┐
-│  Your App   │────▶│  dispatch-proxy  │────▶│   Internet  │
-│  (browser,  │     │  (localhost:1080)│     │             │
-│   aria2)    │     └────────┬─────────┘     └─────────────┘
-└─────────────┘              │
-              ┌──────────────┼──────────────┐
-              │              │              │
-        ┌─────▼─────┐ ┌─────▼─────┐ ┌──────▼──────┐
-        │  WiFi #1  │ │ Ethernet  │ │ Bluetooth   │
-        │  (wlan0)  │ │  (eth0)   │ │  (bnep0)    │
-        └───────────┘ └───────────┘ └─────────────┘
-```
-
-WiBluetooth uses [dispatch-proxy](https://github.com/alexkirsz/dispatch-proxy) under the hood to distribute outgoing connections across all available interfaces. Multi-threaded downloaders can then aggregate bandwidth from all bonded connections.
+| File | Purpose |
+|------|---------|
+| `~/.local/bin/dispatch-toggle.sh` | Main control script |
+| `~/.local/bin/wibluetooth-proxy.py` | HTTP CONNECT → SOCKS5 bridge |
+| `~/.local/bin/wibluetooth-watchdog.sh` | Auto-heal daemon |
+| `~/.wibluetooth-env` | Proxy env vars (auto-sourced) |
+| `~/Desktop/wibluetooth.desktop` | Desktop shortcut |
+| `/tmp/wibluetooth-dispatch.log` | SOCKS5 proxy logs |
+| `/tmp/wibluetooth-http.log` | HTTP bridge logs |
+| `/tmp/wibluetooth-watchdog.pid` | Watchdog PID |
 
 ## Why WiBluetooth?
 
-WiBluetooth provides multi-interface bonding functionality similar to commercial solutions like [Speedify](https://www.speedify.com), but is:
-
-- **Free and open source** — no subscriptions, no data caps, no paywalls
-- **Linux-native** — runs on any distro without proprietary drivers or VPN tunnels
-- **Lightweight** — toggle on/off as needed, no persistent background services
-- **Privacy-friendly** — all traffic stays on your machine, no cloud proxy servers
-- **Auto-healing** — detects and fixes common issues automatically
-
-Speedify is a trademark of Connectify, Inc. WiBluetooth is not affiliated with or endorsed by Connectify, Inc.
-
-## Auto-Healing
-
-WiBluetooth includes built-in auto-recovery for:
-
-- **Missing dependencies** — auto-installs Node.js, BlueZ, network tools
-- **Non-standard setups** — adapts to custom PATH configurations
-- **Stale processes** — cleans up dead proxy instances automatically
-- **Busy ports** — falls back to alternative ports if needed
-- **Package manager issues** — retries with different flags, tries alternatives
-
-Run `dispatch-toggle.sh heal` to manually trigger auto-recovery.
+| Feature | WiBluetooth | Speedify | OpenMPTCProuter |
+|---------|-------------|----------|-----------------|
+| Price | Free | $8+/mo | Free (needs router) |
+| Setup | 1 command | App install | Flash router |
+| Linux native | Yes | No | Router OS |
+| No cloud required | Yes | No | Yes |
+| Auto-heal | Yes | No | No |
+| HTTP + SOCKS5 | Yes | No | No |
 
 ## Related Projects
 
 - [dispatch-proxy](https://github.com/alexkirsz/dispatch-proxy) — The underlying proxy engine
 - [aria2](https://aria2.github.io/) — Multi-protocol download utility
-- [OpenMPTCProuter](https://www.openmptcprouter.com/) — Router-level multipath bonding
-- [Speedify](https://www.speedify.com) — Commercial channel bonding (proprietary)
-
-## Contributing
-
-Contributions welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## LLM Installation
-
-Point your AI assistant to [SKILL.md](SKILL.md) for structured installation instructions.
+- [Speedify](https://www.speedify.com) — Commercial channel bonding
 
 ## License
 
-MIT License. Copyright (c) 2026 GET BIT LABS LLC. See [LICENSE](LICENSE) for details.
+MIT License. Copyright (c) 2026 GET BIT LABS LLC. See [LICENSE](LICENSE).
 
 ---
 
-## Disclaimer
-
-**THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.**
-
-WiBluetooth is provided for educational and personal use. The authors and contributors are not responsible for any damage, data loss, or legal issues that may arise from using this software. Use at your own risk.
-
-- Network bonding may not work on all hardware or network configurations
-- Bluetooth tethering requires a compatible phone with tethering enabled
-- Results depend on the speed and reliability of your individual connections
-- This software is not a VPN and does not provide encryption or anonymity
-- Always comply with your ISP's terms of service regarding connection sharing
-
----
-
-Copyright (c) 2026 GET BIT LABS LLC. All rights reserved.
+**THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.** Use at your own risk. Network bonding may not work on all hardware. Bluetooth tethering requires a compatible phone. This is not a VPN.
