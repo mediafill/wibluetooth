@@ -398,7 +398,13 @@ detect_interfaces() {
         local state=$(cat /sys/class/net/"$iface"/operstate 2>/dev/null || echo "unknown")
         local ip=$(get_ip "$iface")
 
-        if [[ -n "$ip" && "$state" == "up" ]]; then
+        # For Bluetooth interfaces, operstate may be "unknown" - just check for IP
+        local is_bt=false
+        case "$iface" in
+            bnep*|enx*) is_bt=true ;;
+        esac
+
+        if [[ -n "$ip" && ("$state" == "up" || "$is_bt" == "true") ]]; then
             # Classify the interface type
             local iftype="unknown"
             local type_raw=$(nmcli -t -f DEVICE,TYPE device status 2>/dev/null | grep "^${iface}:" | cut -d: -f2)
@@ -415,8 +421,8 @@ detect_interfaces() {
             if [[ "$iftype" == "unknown" ]]; then
                 case "$iface" in
                     wl*)       iftype="wifi" ;;
-                    eth*|en*)  iftype="ethernet" ;;
                     bnep*|enx*) iftype="bluetooth" ;;
+                    eth*|en*)  iftype="ethernet" ;;
                     tun*|tap*) iftype="vpn" ;;
                 esac
             fi
@@ -442,12 +448,15 @@ start_proxy() {
     fi
 
     # Try to activate Bluetooth if not already connected
-    local has_bt=false
     if ! echo "$raw_ifaces" | grep -q "bluetooth"; then
-        local BT_UUID=$(nmcli -t -f NAME,UUID,TYPE connection show 2>/dev/null | grep ':bluetooth:' | cut -d: -f2 | head -1)
-        if [[ -n "$BT_UUID" ]]; then
+        # Check if there's a Bluetooth connection in NetworkManager
+        local BT_CONN=$(nmcli -t -f NAME,UUID,TYPE connection show 2>/dev/null | grep ':bluetooth:' | head -1)
+        if [[ -n "$BT_CONN" ]]; then
+            local BT_UUID=$(echo "$BT_CONN" | cut -d: -f2)
+            local BT_NAME=$(echo "$BT_CONN" | cut -d: -f1)
+            info "Activating Bluetooth: $BT_NAME"
             nmcli connection up "$BT_UUID" &>/dev/null
-            sleep 4
+            sleep 5
             # Re-detect after BT activation
             raw_ifaces=$(detect_interfaces)
         fi
