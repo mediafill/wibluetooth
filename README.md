@@ -63,22 +63,23 @@ dispatch-toggle.sh status
 
 ### Use with Download Managers
 
-Set proxy to `localhost:8080`:
+Set SOCKS5 proxy to `localhost:1080`:
 
 ```bash
 # Environment variable
-export http_proxy=http://localhost:8080
-export https_proxy=http://localhost:8080
+export all_proxy=socks5://localhost:1080
 
 # aria2 (multi-threaded downloader) - recommended
-aria2c -x16 --all-proxy=http://localhost:8080 https://example.com/file.zip
+aria2c -x16 --all-proxy=socks5://localhost:1080 https://example.com/file.zip
 
 # wget
-wget -e use_proxy=yes -e http_proxy=localhost:8080 https://example.com/file.zip
+wget -e use_proxy=yes -e http_proxy=socks5://localhost:1080 https://example.com/file.zip
 
 # curl
-curl -x http://localhost:8080 https://example.com/file.zip
+curl -x socks5://localhost:1080 https://example.com/file.zip
 ```
+
+For apps that don't support SOCKS5, HTTP proxy is also available on port 8080.
 
 ## Requirements
 
@@ -118,7 +119,7 @@ curl -x http://localhost:8080 https://example.com/file.zip
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────┐
 │  Your App   │────▶│  dispatch-proxy  │────▶│   Internet  │
-│  (browser,  │     │  (localhost:8080) │     │             │
+│  (browser,  │     │  (localhost:1080)│     │             │
 │   aria2)    │     └────────┬─────────┘     └─────────────┘
 └─────────────┘              │
               ┌──────────────┼──────────────┐

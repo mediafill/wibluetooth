@@ -375,6 +375,8 @@ create_toggle_script() {
 PROXY_PID_FILE="/tmp/wibluetooth.pid"
 APP_NAME="WiBluetooth"
 LOG_FILE="/tmp/wibluetooth.log"
+SOCKS_PORT=1080
+HTTP_PORT=8080
 
 get_ip() { ip -4 addr show "$1" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1; }
 is_running() { [ -f "$PROXY_PID_FILE" ] && kill -0 "$(cat "$PROXY_PID_FILE")" 2>/dev/null; }
@@ -495,8 +497,11 @@ start_proxy() {
     # Start with auto-recovery
     local start_attempts=0
     local max_start_attempts=3
+    local proxy_type="SOCKS5"
+    local proxy_port=$SOCKS_PORT
+
     while [[ $start_attempts -lt $max_start_attempts ]]; do
-        nohup "$DISPATCH_BIN" start $ADDRS --http > "$LOG_FILE" 2>&1 &
+        nohup "$DISPATCH_BIN" start $ADDRS > "$LOG_FILE" 2>&1 &
         local DPID=$!
         echo "$DPID" > "$PROXY_PID_FILE"
         sleep 2
@@ -508,35 +513,49 @@ start_proxy() {
         ((start_attempts++))
         if [[ $start_attempts -lt $max_start_attempts ]]; then
             # Auto-heal: kill stale processes and retry
-            fuser -k 8080/tcp 2>/dev/null || true
+            fuser -k $SOCKS_PORT/tcp 2>/dev/null || true
+            fuser -k $HTTP_PORT/tcp 2>/dev/null || true
             pkill -9 -f "dispatch" 2>/dev/null || true
             sleep 1
             warn "Start attempt $start_attempts failed, retrying..."
         fi
     done
 
+    # If SOCKS5 failed, try HTTP mode
     if ! kill -0 "$DPID" 2>/dev/null; then
-        # Last resort: try different port
-        warn "Port 8080 busy, trying port 8081..."
-        nohup "$DISPATCH_BIN" start $ADDRS --http --port 8081 > "$LOG_FILE" 2>&1 &
+        warn "SOCKS5 failed, trying HTTP mode..."
+        proxy_type="HTTP"
+        proxy_port=$HTTP_PORT
+        nohup "$DISPATCH_BIN" start $ADDRS --http > "$LOG_FILE" 2>&1 &
         DPID=$!
         echo "$DPID" > "$PROXY_PID_FILE"
         sleep 2
 
         if ! kill -0 "$DPID" 2>/dev/null; then
-            notify-send -u critical -i network-offline "$APP_NAME" "Failed to start proxy.\nCheck $LOG_FILE"
-            rm -f "$PROXY_PID_FILE"
-            exit 1
+            # Last resort: try different port
+            warn "Port $HTTP_PORT busy, trying port 8081..."
+            proxy_port=8081
+            nohup "$DISPATCH_BIN" start $ADDRS --http --port 8081 > "$LOG_FILE" 2>&1 &
+            DPID=$!
+            echo "$DPID" > "$PROXY_PID_FILE"
+            sleep 2
+
+            if ! kill -0 "$DPID" 2>/dev/null; then
+                notify-send -u critical -i network-offline "$APP_NAME" "Failed to start proxy.\nCheck $LOG_FILE"
+                rm -f "$PROXY_PID_FILE"
+                exit 1
+            fi
         fi
     fi
 
-    local summary="Proxy Started\n\nBonded $IFACE_COUNT interface(s):$IFACE_INFO\n\nProxy: localhost:8080"
+    local summary="Proxy Started\n\nBonded $IFACE_COUNT interface(s):$IFACE_INFO\n\n$proxy_type: localhost:$proxy_port"
     notify-send -u normal -i network-transmit-receive -t 5000 "$APP_NAME" "$summary"
 }
 
 stop_proxy() {
     [[ -f "$PROXY_PID_FILE" ]] && kill -9 "$(cat "$PROXY_PID_FILE")" 2>/dev/null && rm -f "$PROXY_PID_FILE"
-    fuser -k 8080/tcp 2>/dev/null || true
+    fuser -k $SOCKS_PORT/tcp 2>/dev/null || true
+    fuser -k $HTTP_PORT/tcp 2>/dev/null || true
     pkill -9 -f "dispatch-proxy" 2>/dev/null || true
     pkill -9 -f "dispatch start" 2>/dev/null || true
     sleep 1
@@ -572,7 +591,8 @@ case "${1:-toggle}" in
     heal)
         header "Running Auto-Heal"
         # Kill stale processes
-        fuser -k 8080/tcp 2>/dev/null || true
+        fuser -k $SOCKS_PORT/tcp 2>/dev/null || true
+        fuser -k $HTTP_PORT/tcp 2>/dev/null || true
         pkill -9 -f "dispatch" 2>/dev/null || true
         rm -f "$PROXY_PID_FILE"
         sleep 1
@@ -593,9 +613,11 @@ case "${1:-toggle}" in
         if is_running; then
             PID=$(cat "$PROXY_PID_FILE")
             if kill -0 "$PID" 2>/dev/null; then
-                # Check if proxy responds
-                if curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://localhost:8080 2>/dev/null | grep -q "200\|404"; then
-                    ok "Proxy healthy (PID: $PID, responding on :8080)"
+                # Check if proxy responds (try SOCKS5 then HTTP)
+                if curl -s -o /dev/null -w "%{http_code}" --max-time 3 --socks5 localhost:$SOCKS_PORT http://example.com 2>/dev/null | grep -q "200\|301\|302"; then
+                    ok "Proxy healthy (PID: $PID, SOCKS5 on :$SOCKS_PORT)"
+                elif curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://localhost:$HTTP_PORT 2>/dev/null | grep -q "200\|404"; then
+                    ok "Proxy healthy (PID: $PID, HTTP on :$HTTP_PORT)"
                 else
                     warn "Proxy running but not responding. Run: dispatch-toggle.sh heal"
                 fi
@@ -610,8 +632,13 @@ case "${1:-toggle}" in
         if is_running; then
             PID=$(cat "$PROXY_PID_FILE")
             IFACES=$(grep "Dispatching to" "$LOG_FILE" 2>/dev/null | sed 's/.*addresses //')
+            # Determine which port is active
+            local active_port=$SOCKS_PORT
+            if fuser $HTTP_PORT/tcp &>/dev/null; then
+                active_port=$HTTP_PORT
+            fi
             notify-send -u normal -i network-transmit-receive -t 5000 "$APP_NAME" \
-                "Running (PID: $PID)\n\n$IFACES\nProxy: localhost:8080"
+                "Running (PID: $PID)\n\n$IFACES\nSOCKS5: localhost:$SOCKS_PORT\nHTTP: localhost:$HTTP_PORT"
         else
             notify-send -u normal -i network-offline -t 3000 "$APP_NAME" "Stopped\nUsing direct connection."
         fi
@@ -761,12 +788,12 @@ main() {
     echo -e "  • Right-click for Start / Stop / Status / List / Heal"
     echo -e "  • Or run: ${CYAN}dispatch-toggle.sh start|stop|toggle|list|status|heal|health${NC}"
     echo -e ""
-    echo -e "  ${BOLD}Manual proxy:${NC}"
-    echo -e "  • HTTP proxy: ${CYAN}localhost:8080${NC}"
-    echo -e "  • Set: ${CYAN}export http_proxy=http://localhost:8080${NC}"
+    echo -e "  ${BOLD}Proxy Settings:${NC}"
+    echo -e "  • SOCKS5 proxy: ${CYAN}localhost:1080${NC} (recommended - works with all sites)"
+    echo -e "  • HTTP proxy: ${CYAN}localhost:8080${NC} (for apps that don't support SOCKS5)"
     echo -e ""
     echo -e "  ${BOLD}Multi-threaded downloads:${NC}"
-    echo -e "  • ${CYAN}aria2c -x16 --all-proxy=http://localhost:8080 <url>${NC}"
+    echo -e "  • ${CYAN}aria2c -x16 --all-proxy=socks5://localhost:1080 <url>${NC}"
     echo -e ""
     echo -e "  ${BOLD}Troubleshooting:${NC}"
     echo -e "  • ${CYAN}dispatch-toggle.sh heal${NC} - auto-fix issues"
