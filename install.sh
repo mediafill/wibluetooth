@@ -414,7 +414,6 @@ detect_interfaces() {
                 bluetooth)  iftype="bluetooth" ;;
                 bt)         iftype="bluetooth" ;;
                 tun|tunl*)  iftype="vpn" ;;
-                *)          iftype="other" ;;
             esac
 
             # Also check by interface name patterns
